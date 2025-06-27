@@ -2,8 +2,8 @@
 title: "Rapport de laboratoire 3"
 subtitle: "MTH8408"
 author:
-  - name: Votre nom
-    email: votre.adresse@polymtl.ca
+  - name: Joey Van Melle
+    email: joey.van-melle@polymtl.ca
     affiliation:
       - name: Polytechnique Montréal
 format:
@@ -28,6 +28,13 @@ engine: julia
 using Pkg
 Pkg.activate("labo3_env")
 using LinearAlgebra
+using Printf
+using Krylov
+Pkg.add("ADNLPModels")
+Pkg.add("NLPModels")
+using NLPModels, ADNLPModels
+Pkg.add("LDLFactorizations")
+using LDLFactorizations
 ```
 
 # Contexte
@@ -58,7 +65,124 @@ Tester votre implémentation sur le problème polynomial vu en classe et les pro
 
 ```{julia}
 function newton_modifiee(model, eps_a=1.0e-5, eps_r=1.0e-5)
-  # votre code ici
+  
+
+  """
+      calculate_max_iterations(dimension)
+
+  Compute the maximum number of iterations of modified newton search based on the dimension of the problem.
+  args : 
+      - dimension : the dimension of the problem.
+  Returns : The maximum number of iterations (int64). 
+  """
+  function calculate_max_iterations(dimension, nbr_of_operations_upper_bound=100000000)
+      #Assuming the upper-bound on the complexity of matrix*vector multiplication is n^3
+      println(dimension)
+      operations_per_step = dimension^3
+      return floor(nbr_of_operations_upper_bound/operations_per_step)
+  end
+
+
+  """
+      armijo(x_k, descent_direction, f, gradient_x_k)
+
+  Compute a length of step along a specified direction of descent to ensure a reduction in value from f(x_k) to f(x_k + t_k*d_k).
+
+  args :
+      - x_k : The point from which an 'optimal' step direction is to be found (vector of float64).
+      - descent_direction : The direction of descent on which the length of the step is to be calculated (vector of float64).
+      - f : The function to be reduced (a function that returns a real number).
+      - gradient_x_k : The gradient of f at x_k (vector of float64).
+  Returns : the length of the step (float64). 
+  """
+  function armijo(x_k, descent_direction, f, f_x_k, gradient_x_k)
+      t_k = 1
+      while f(x_k + t_k*descent_direction) > f_x_k + (0.8 * t_k * ((gradient_x_k)' * descent_direction))
+          t_k *= 0.5
+      end
+      return t_k
+  end
+
+  """
+      solve_with_modified_cholesky(modified_hessian, gradient_x_k)
+
+  Solves a linear problem with cholesky factorisation.
+
+  args :
+      - hessian : The hessian matrix (matrix of float64).
+      - gradient_x_k : The constant vector of the linear system (vector of float64).
+  Returns : a vector that solves the linear system (vector of float64)
+  """
+  function solve_with_modified_cholesky(hessian_x_k, gradient_x_k)
+      H = Symmetric(triu(hessian_x_k), :U)
+      LDL = ldl_analyze(H)
+      LDL.tol = Inf
+      LDL.r1 = 1.0e-5
+      LDL = ldl_factorize!(H, LDL)
+      descent_direction = -LDL\gradient_x_k
+      return descent_direction
+  end
+
+  """
+      modified_newton(f, gradient, hessian,  initial_point, eps_a, eps_r)
+
+  Performs the modified newton's method on a unconstrained minimisation problem.
+  args :
+      - f : The function to be minimised (function that returns a float64).
+      - gradient : The gradient of the function to be minimized (function that returns a vector of float64).
+      - initial_point : The initial point on which the search begins (vector of float64).
+      - eps_a : The absolute stop condition (float64).
+      - eps_r : The relative stop condition (float64).
+  """
+  function modified_newton(f, gradient, hessian,  initial_point, eps_a, eps_r)
+      x_k = initial_point
+      k = 0
+      f_x_k = f(x_k)
+      gradient_x_k = gradient(initial_point)
+      ngradient_x_k = norm(gradient_x_k)
+      max_iterations = calculate_max_iterations(size(gradient_x_k)[1])
+      stop_condition = eps_a + eps_r * ngradient_x_k
+      @printf  "%2s  %7s %12s\n" "it" "‖∇f(x)‖" "f"
+
+      while ngradient_x_k > stop_condition && k < max_iterations
+          descent_direction = solve_with_modified_cholesky(hessian(x_k), gradient_x_k)
+          t_k = armijo(x_k, descent_direction, f, f_x_k, gradient_x_k)
+          x_k += t_k.*descent_direction
+          gradient_x_k = gradient(x_k)
+          ngradient_x_k = norm(gradient_x_k)
+          k +=1
+          f_x_k = f(x_k)
+          @printf  "%2s  %7s %12s\n" k ngradient_x_k f_x_k
+      end
+      println(k)
+      println(max_iterations)
+      if k < max_iterations
+          println("La recherche a convergée. solution:")
+          print(x_k)
+      else 
+          println("La recherche n'a pas réussi à converger.")
+      end
+  end
+
+  """
+      modified_newton_wrapper(model, eps_a, eps_r)
+
+  A function wrapper to use AbstractNLPModel as model on which modified newton's method is too be performed.
+  args : 
+      - model : the AbrastNLPModel to be used (AbrastNLPModel).
+      - eps_a : the absolute error of the solution (float64).
+      - eps_r : the relative error of the solution (float64).
+  """
+  function modified_newton_wrapper(model, eps_a, eps_r)
+      f(x)= obj(model, x)
+      gradient(x) = grad(model, x)
+      hessian(x) = hess(model, x)
+      initial_point = model.meta.x0
+      return modified_newton(f, gradient, hessian, initial_point, eps_a, eps_r)
+  end
+
+modified_newton_wrapper(model, eps_a, eps_r)
+
 end
 ```
 
@@ -74,7 +198,82 @@ Tester votre implémentation sur le problème polynomial vu en classe et les pro
 
 ```{julia}
 function newton_inexacte(model, eps_a=1.0e-5, eps_r=1.0e-5)
-  # votre code ici
+  
+  """
+      calculate_max_iterations(dimension)
+  
+  Compute the maximum number of iterations of modified newton search based on the dimension of the problem.
+  args : 
+      - dimension : the dimension of the problem.
+  Returns : The maximum number of iterations (int64). 
+  """
+  function calculate_max_iterations(dimension, nbr_of_operations_upper_bound=100000000)
+      #Assuming the upper-bound on the complexity of matrix*vector multiplication is n^3
+    operations_per_step = dimension^3
+    return floor(nbr_of_operations_upper_bound/operations_per_step)
+  end
+  
+  """
+      inexact_newton(f, gradient, hessian,  initial_point, eps_a, eps_r)
+  
+  Performs the inexact newton's method on a unconstrained minimisation problem.
+  args :
+      - f : The function to be minimised (function that returns a float64).
+      - gradient : The gradient of the function to be minimized (function that returns a vector of float64).
+      - initial_point : The initial point on which the search begins (vector of float64).
+      - eps_a : The absolute stop condition (float64).
+      - eps_r : The relative stop condition (float64).
+  """
+  function inexact_newton(f, gradient, hessian,  initial_point, eps_a, eps_r)
+        
+      x_k = initial_point
+      k = 0
+      f_x_k = f(x_k)
+      gradient_x_k = gradient(initial_point)
+      norm_gradient_x_k = norm(gradient_x_k)
+      stop_condition = eps_a + eps_r * norm_gradient_x_k
+      max_iterations = calculate_max_iterations(size(gradient_x_k)[1])
+      @printf  "%2s  %7s %12s\n" "it" "‖∇f(x)‖" "f"
+      n_k = 0.5
+      
+      while norm_gradient_x_k > stop_condition && k < max_iterations
+          tol = n_k * norm_gradient_x_k
+          (descent_direction, stats) = Krylov.cg(hessian(x_k), gradient_x_k, atol=tol)
+          x_k += descent_direction
+          gradient_x_k = gradient(x_k)
+          norm_gradient_x_k = norm(gradient_x_k)
+          k +=1
+          f_x_k = f(x_k)
+          n_k *= 0.5
+          @printf  "%2s  %7s %12s\n" k norm_gradient_x_k f_x_k
+      end
+      if k < max_iterations
+          println("La recherche a convergée. solution:")
+          print(x_k)
+      else 
+          println("La recherche n'a pas réussi à converger.")
+      end
+  end
+  
+  """
+      modified_newton_wrapper(model, eps_a, eps_r)
+  
+  A function wrapper to use AbstractNLPModel as model on which modified newton's method is too be performed.
+  args : 
+      - model : the AbrastNLPModel to be used (AbrastNLPModel).
+      - eps_a : the absolute error of the solution (float64).
+      - eps_r : the relative error of the solution (float64).
+  """
+  function modified_newton_wrapper(model, eps_a, eps_r)
+      f(x)= obj(model, x)
+      gradient(x) = grad(model, x)
+      hessian(x) = hess(model, x)
+      initial_point = model.meta.x0
+      return inexact_newton(f, gradient, hessian, initial_point, eps_a, eps_r)
+  end
+
+  modified_newton_wrapper(model, eps_a, eps_r)
+  
 end
 ```
 
@@ -85,8 +284,11 @@ end
 Votre premier problème test sera le problème polynomial vu en classe.
 
 ```{julia}
-# f(x) = ...
-# model = ADNLPModel(...)
+    f(x) = 2*x[1]^3 -3*x[1]^2 - 6*x[1] * x[2] * (x[1] - x[2]-1)
+    x0 = [1.0, 1.0]
+    model = ADNLPModel(f, x0)
+    newton_modifiee(model, 1.0e-5, 1.0e-5)
+    newton_inexacte(model, 1.0e-5, 1.0e-5)
 ```
 
 Utiliser ensuite les problèmes non linéaires du dépôt `OptimizationProblems.jl` qui sont sans contraintes et ont 100 variables.
@@ -106,15 +308,30 @@ Parmis ces problèmes, choisissez-en 3 et illustrez le comportement de chacune d
 ## Validation de la méthode de Newton modifiée
 
 ```{julia}
-# votre code ici
+
+#Créer un iterateur a partir du générateur
+
+model, state = iterate(problems)
+for i in 1:3
+    model, state = iterate(problems)
+    newton_modifiee(model, 1.0e-5, 1.0e-5)
+end
+
 ```
 
 ## Validation de la méthode de Newton tronquée
 
 ```{julia}
-# votre code ici
+model, state = iterate(problems)
+for i in 1:3
+    model, state = iterate(problems)
+    newton_inexacte(model, 1.0e-5, 1.0e-5)
+end
 ```
 
 ## Commentaires sur les résultats
 
 <!-- Insérer ici votre évaluation des résultats -->
+La recherche converge toujours pour la méthode de Newton modifiée mais ne semble pas converger pour la méthode de newton inexacte. 
+J'imagine que j'ai une erreur dans mon implementation. Je pense que c'est parce que je ne change pas la taille du pas (avec un linesearch
+par exemple), mais cela ne semblait pas être fait dans les notes.
