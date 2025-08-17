@@ -29,6 +29,7 @@ using Pkg
 Pkg.activate("labo3_env")
 using LinearAlgebra
 using Printf
+Pkg.add("Krylov")
 using Krylov
 Pkg.add("ADNLPModels")
 Pkg.add("NLPModels")
